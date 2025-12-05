@@ -24,16 +24,18 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define DAC_BUFFER_SIZE    256
-#define WAVEFORM_SINE      0
-#define WAVEFORM_SQUARE    1
-#define WAVEFORM_TRIANGLE  2
-#define WAVEFORM_SAWTOOTH  3
-#define PI                 3.14159265359f
-#define MIN_FREQ           100
-#define MAX_FREQ           100000
-#define MIN_AMP            0
-#define MAX_AMP            4095
+#define DAC_BUFFER_SIZE       256
+#define MAX_DAC_SAMPLE_RATE   9000000UL
+#define MIN_ACTIVE_SAMPLES    16
+#define WAVEFORM_SINE         0
+#define WAVEFORM_SQUARE       1
+#define WAVEFORM_TRIANGLE     2
+#define WAVEFORM_SAWTOOTH     3
+#define PI                    3.14159265359f
+#define MIN_FREQ              100
+#define MAX_FREQ              100000
+#define MIN_AMP               0
+#define MAX_AMP               4095
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -43,19 +45,19 @@
 /* Private variables ---------------------------------------------------------*/
 #if defined ( __ICCARM__ ) /*!< IAR Compiler */
 #pragma location=0x2007c000
-ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT]; /* Ethernet Rx DMA Descriptors */
+ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT];
 #pragma location=0x2007c0a0
-ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT]; /* Ethernet Tx DMA Descriptors */
+ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT];
 
-#elif defined ( __CC_ARM )  /* MDK ARM Compiler */
+#elif defined ( __CC_ARM )
 
-__attribute__((at(0x2007c000))) ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT]; /* Ethernet Rx DMA Descriptors */
-__attribute__((at(0x2007c0a0))) ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT]; /* Ethernet Tx DMA Descriptors */
+__attribute__((at(0x2007c000))) ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT];
+__attribute__((at(0x2007c0a0))) ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT];
 
-#elif defined ( __GNUC__ ) /* GNU Compiler */
+#elif defined ( __GNUC__ )
 
-ETH_DMADescTypeDef DMARxDscrTab[ETH_RX_DESC_CNT] __attribute__((section(".RxDecripSection"))); /* Ethernet Rx DMA Descriptors */
-ETH_DMADescTypeDef DMATxDscrTab[ETH_TX_DESC_CNT] __attribute__((section(".TxDecripSection")));   /* Ethernet Tx DMA Descriptors */
+ETH_DMADescTypeDef DMARxDscrTab[ETH_RX_DESC_CNT] __attribute__((section(".RxDecripSection")));
+ETH_DMADescTypeDef DMATxDscrTab[ETH_TX_DESC_CNT] __attribute__((section(".TxDecripSection")));
 #endif
 
 ETH_TxPacketConfig TxConfig;
@@ -68,8 +70,8 @@ UART_HandleTypeDef huart3;
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE BEGIN PV */
-/* F7 D-Cache 대응: 32바이트 정렬 */
 __attribute__((aligned(32))) uint16_t dac_buffer[DAC_BUFFER_SIZE];
+static uint16_t active_samples = DAC_BUFFER_SIZE;
 
 uint32_t current_frequency = 1000;
 volatile uint8_t current_waveform = WAVEFORM_SINE;
@@ -80,9 +82,8 @@ uint8_t uart_rx_buffer[1];
 char uart_cmd_buffer[64];
 uint8_t uart_cmd_index = 0;
 
-/* 메인 루프에서 처리할 작업 플래그 */
-volatile uint8_t need_rebuild = 0;  // 파형/진폭 변경
-volatile uint8_t need_retune  = 0;  // 주파수 변경
+volatile uint8_t need_rebuild = 0;
+volatile uint8_t need_retune  = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -95,6 +96,7 @@ static void MX_USB_OTG_FS_PCD_Init(void);
 static void MX_DAC_Init(void);
 static void MX_TIM6_Init(void);
 /* USER CODE BEGIN PFP */
+static void UpdateActiveSampleCount(void);
 void GenerateSineWave(void);
 void GenerateSquareWave(void);
 void GenerateTriangleWave(void);
@@ -115,65 +117,73 @@ static void FlushDacBufferCache(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+static void UpdateActiveSampleCount(void)
+{
+  uint32_t max_samples = MAX_DAC_SAMPLE_RATE / current_frequency;
+  if (max_samples > DAC_BUFFER_SIZE) max_samples = DAC_BUFFER_SIZE;
+  if (max_samples < MIN_ACTIVE_SAMPLES) max_samples = MIN_ACTIVE_SAMPLES;
+  active_samples = (uint16_t)max_samples;
+}
+
 void GenerateSineWave(void)
 {
-  for (uint16_t i = 0; i < DAC_BUFFER_SIZE; ++i)
+  for (uint16_t i = 0; i < active_samples; ++i)
   {
-    float v = sinf(2.0f * PI * i / DAC_BUFFER_SIZE);
-    float scaled = (v + 1.0f) * 0.5f * (float)current_amplitude; // 0~Amp
+    float v = sinf(2.0f * PI * i / active_samples);
+    float scaled = (v + 1.0f) * 0.5f * (float)current_amplitude;
     dac_buffer[i] = (uint16_t)scaled;
   }
 }
 
 void GenerateSquareWave(void)
 {
-  for (uint16_t i = 0; i < DAC_BUFFER_SIZE; ++i)
+  uint16_t half = active_samples / 2U;
+  for (uint16_t i = 0; i < active_samples; ++i)
   {
-    dac_buffer[i] = (i < (DAC_BUFFER_SIZE / 2)) ? current_amplitude : 0u;
+    dac_buffer[i] = (i < half) ? current_amplitude : 0u;
   }
 }
 
 void GenerateTriangleWave(void)
 {
-  for (uint16_t i = 0; i < DAC_BUFFER_SIZE; ++i)
+  uint16_t half = active_samples / 2U;
+  for (uint16_t i = 0; i < active_samples; ++i)
   {
-    if (i < (DAC_BUFFER_SIZE / 2))
+    if (i < half)
     {
       dac_buffer[i] = (uint16_t)((uint32_t)i *
                                  (uint32_t)current_amplitude * 2u /
-                                 DAC_BUFFER_SIZE);
+                                 active_samples);
     }
     else
     {
       dac_buffer[i] = (uint16_t)((uint32_t)current_amplitude -
-                                 ((uint32_t)(i - (DAC_BUFFER_SIZE / 2)) *
+                                 ((uint32_t)(i - half) *
                                   (uint32_t)current_amplitude * 2u /
-                                  DAC_BUFFER_SIZE));
+                                  active_samples));
     }
   }
 }
 
 void GenerateSawtoothWave(void)
 {
-  for (uint16_t i = 0; i < DAC_BUFFER_SIZE; ++i)
+  for (uint16_t i = 0; i < active_samples; ++i)
   {
     dac_buffer[i] = (uint16_t)((uint32_t)i *
                                (uint32_t)current_amplitude /
-                               (DAC_BUFFER_SIZE - 1));
+                               (active_samples - 1u));
   }
 }
 
-/* F7 D-Cache: DMA가 읽기 전에 메모리 반영 */
 static void FlushDacBufferCache(void)
 {
 #if defined (SCB_CleanDCache_by_Addr)
   uint32_t addr = (uint32_t)dac_buffer & ~0x1FU;
-  uint32_t len  = ((DAC_BUFFER_SIZE * sizeof(uint16_t)) + 31U) & ~31U;
+  uint32_t len  = ((active_samples * sizeof(uint16_t)) + 31U) & ~31U;
   SCB_CleanDCache_by_Addr((uint32_t *)addr, len);
 #endif
 }
 
-/* 현재 waveform과 amplitude에 맞게 dac_buffer 채우기 */
 void UpdateWaveform(void)
 {
   switch (current_waveform)
@@ -190,7 +200,6 @@ void UpdateWaveform(void)
   FlushDacBufferCache();
 }
 
-/* DAC + DMA + TIM6 멈추기 */
 void StopDACOutput(void)
 {
   if (dac_started)
@@ -201,8 +210,6 @@ void StopDACOutput(void)
   }
 }
 
-/* 현재 current_frequency에 맞게 TIM6 설정 + DMA 시작
-   (호출 전에 버퍼는 준비되어 있다고 가정) */
 HAL_StatusTypeDef StartDACOutput(void)
 {
   uint64_t samples_per_sec;
@@ -213,10 +220,9 @@ HAL_StatusTypeDef StartDACOutput(void)
   if (current_frequency < MIN_FREQ || current_frequency > MAX_FREQ)
     return HAL_ERROR;
 
-  samples_per_sec = (uint64_t)current_frequency * (uint64_t)DAC_BUFFER_SIZE;
+  samples_per_sec = (uint64_t)current_frequency * (uint64_t)active_samples;
   if (samples_per_sec == 0) return HAL_ERROR;
 
-  /* APB1 prescaler > 1이면 TIM 클럭 = 2 * PCLK1 */
   if (pclk1 != SystemCoreClock)
     timer_clk = (uint64_t)pclk1 * 2ULL;
 
@@ -228,23 +234,25 @@ HAL_StatusTypeDef StartDACOutput(void)
   if (timer_period == 0)     timer_period = 1;
   if (timer_period > 0xFFFF) timer_period = 0xFFFF;
 
-  /* 타이머 설정 */
   htim6.Instance->ARR = timer_period;
   htim6.Instance->CNT = 0;
   htim6.Instance->EGR = TIM_EGR_UG;
 
   FlushDacBufferCache();
-
-  if (HAL_TIM_Base_Start(&htim6) != HAL_OK)
-    return HAL_ERROR;
+  __HAL_DAC_CLEAR_FLAG(&hdac, DAC_FLAG_DMAUDR1);
 
   if (HAL_DAC_Start_DMA(&hdac,
                         DAC_CHANNEL_1,
                         (uint32_t *)dac_buffer,
-                        DAC_BUFFER_SIZE,
+                        active_samples,
                         DAC_ALIGN_12B_R) != HAL_OK)
   {
-    HAL_TIM_Base_Stop(&htim6);
+    return HAL_ERROR;
+  }
+
+  if (HAL_TIM_Base_Start(&htim6) != HAL_OK)
+  {
+    HAL_DAC_Stop_DMA(&hdac, DAC_CHANNEL_1);
     return HAL_ERROR;
   }
 
@@ -252,10 +260,10 @@ HAL_StatusTypeDef StartDACOutput(void)
   return HAL_OK;
 }
 
-/* 파형/진폭 바뀔 때: 안전하게 멈추고 → 버퍼 빌드 → 다시 시작 */
 void RebuildWaveformAndRestart(void)
 {
   StopDACOutput();
+  UpdateActiveSampleCount();
   UpdateWaveform();
   if (StartDACOutput() != HAL_OK)
   {
@@ -263,10 +271,10 @@ void RebuildWaveformAndRestart(void)
   }
 }
 
-/* 주파수만 바뀔 때: 멈추고 → (버퍼는 그대로) 다시 시작 */
 void RetuneFrequencyAndRestart(void)
 {
   StopDACOutput();
+  UpdateActiveSampleCount();
   if (StartDACOutput() != HAL_OK)
   {
     Error_Handler();
@@ -277,16 +285,12 @@ void ProcessCommand(char *cmd)
 {
   if (cmd == NULL || cmd[0] == '\0') return;
 
-  /* F<Hz> : Frequency 설정 */
   if (cmd[0] == 'F' || cmd[0] == 'f')
   {
     uint32_t f = (uint32_t)atoi(&cmd[1]);
     if (f >= MIN_FREQ && f <= MAX_FREQ)
     {
       current_frequency = f;
-
-      /* 여기서는 실제로 타이머를 건드리지 않고,
-         메인 루프에서 RetuneFrequencyAndRestart() 호출하도록 플래그만 세움 */
       need_retune = 1;
 
       char msg[64];
@@ -300,15 +304,12 @@ void ProcessCommand(char *cmd)
       HAL_UART_Transmit(&huart3, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
     }
   }
-  /* A<0-4095> : Amplitude 설정 */
   else if (cmd[0] == 'A' || cmd[0] == 'a')
   {
     uint32_t a = (uint32_t)atoi(&cmd[1]);
     if (a >= MIN_AMP && a <= MAX_AMP)
     {
       current_amplitude = (uint16_t)a;
-
-      /* 버퍼 다시 만들어야 → 메인 루프에서 RebuildWaveformAndRestart() */
       need_rebuild = 1;
 
       char msg[64];
@@ -322,14 +323,13 @@ void ProcessCommand(char *cmd)
       HAL_UART_Transmit(&huart3, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
     }
   }
-  /* W<0-3> : Waveform 선택 */
   else if (cmd[0] == 'W' || cmd[0] == 'w')
   {
     int w = cmd[1] - '0';
     if (w >= WAVEFORM_SINE && w <= WAVEFORM_SAWTOOTH)
     {
       current_waveform = (uint8_t)w;
-      need_rebuild = 1;  // 파형 모양 변경이므로 버퍼 재생성
+      need_rebuild = 1;
 
       const char *names[] = {"SINE","SQUARE","TRIANGLE","SAWTOOTH"};
       char msg[48];
@@ -342,7 +342,6 @@ void ProcessCommand(char *cmd)
       HAL_UART_Transmit(&huart3, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
     }
   }
-  /* 단일 숫자 0~3 : 바로 파형 선택 */
   else if (cmd[0] >= '0' && cmd[0] <= '3')
   {
     int w = cmd[0] - '0';
@@ -354,7 +353,6 @@ void ProcessCommand(char *cmd)
     sprintf(msg, "Waveform: %s\r\n", names[current_waveform]);
     HAL_UART_Transmit(&huart3, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
   }
-  /* D : 현재 상태 표시 */
   else if (cmd[0] == 'D' || cmd[0] == 'd')
   {
     const char *names[] = {"SINE","SQUARE","TRIANGLE","SAWTOOTH"};
@@ -364,7 +362,6 @@ void ProcessCommand(char *cmd)
             current_frequency, names[current_waveform], current_amplitude);
     HAL_UART_Transmit(&huart3, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
   }
-  /* H : Help */
   else if (cmd[0] == 'H' || cmd[0] == 'h')
   {
     char msg[] =
@@ -394,7 +391,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
       if (uart_cmd_index > 0)
       {
         uart_cmd_buffer[uart_cmd_index] = '\0';
-        ProcessCommand(uart_cmd_buffer);   // 여기서는 플래그와 상태만 변경
+        ProcessCommand(uart_cmd_buffer);
         uart_cmd_index = 0;
       }
     }
@@ -409,10 +406,6 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
 /* USER CODE END 0 */
 
-/**
-  * @brief  The application entry point.
-  * @retval int
-  */
 int main(void)
 {
   HAL_Init();
@@ -426,7 +419,7 @@ int main(void)
   MX_DAC_Init();
   MX_TIM6_Init();
 
-  /* 초기 파형 생성 후 출력 시작 */
+  UpdateActiveSampleCount();
   UpdateWaveform();
   if (StartDACOutput() != HAL_OK)
     Error_Handler();
@@ -443,7 +436,6 @@ int main(void)
 
   while (1)
   {
-    /* 인터럽트에서 세운 플래그를 메인 루프에서 처리 */
     if (need_rebuild)
     {
       need_rebuild = 0;
@@ -458,6 +450,10 @@ int main(void)
     HAL_Delay(1);
   }
 }
+
+/* SystemClock_Config, MX_* init, Error_Handler, assert_failed remain unchanged */
+/* ... (keep the rest of CubeMX-generated code as in your file) */
+
 
 
 /**
