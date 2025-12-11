@@ -45,28 +45,33 @@
 /* Private variables ---------------------------------------------------------*/
 #if defined ( __ICCARM__ ) /*!< IAR Compiler */
 #pragma location=0x2007c000
-ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT];
+ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT]; /* Ethernet Rx DMA Descriptors */
 #pragma location=0x2007c0a0
-ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT];
+ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT]; /* Ethernet Tx DMA Descriptors */
 
-#elif defined ( __CC_ARM )
+#elif defined ( __CC_ARM )  /* MDK ARM Compiler */
 
-__attribute__((at(0x2007c000))) ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT];
-__attribute__((at(0x2007c0a0))) ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT];
+__attribute__((at(0x2007c000))) ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT]; /* Ethernet Rx DMA Descriptors */
+__attribute__((at(0x2007c0a0))) ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT]; /* Ethernet Tx DMA Descriptors */
 
-#elif defined ( __GNUC__ )
+#elif defined ( __GNUC__ ) /* GNU Compiler */
 
-ETH_DMADescTypeDef DMARxDscrTab[ETH_RX_DESC_CNT] __attribute__((section(".RxDecripSection")));
-ETH_DMADescTypeDef DMATxDscrTab[ETH_TX_DESC_CNT] __attribute__((section(".TxDecripSection")));
+ETH_DMADescTypeDef DMARxDscrTab[ETH_RX_DESC_CNT] __attribute__((section(".RxDecripSection"))); /* Ethernet Rx DMA Descriptors */
+ETH_DMADescTypeDef DMATxDscrTab[ETH_TX_DESC_CNT] __attribute__((section(".TxDecripSection")));   /* Ethernet Tx DMA Descriptors */
 #endif
 
 ETH_TxPacketConfig TxConfig;
 
 DAC_HandleTypeDef hdac;
 DMA_HandleTypeDef hdma_dac1;
+
 ETH_HandleTypeDef heth;
+
 TIM_HandleTypeDef htim6;
+
+UART_HandleTypeDef huart4;
 UART_HandleTypeDef huart3;
+
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE BEGIN PV */
@@ -95,6 +100,7 @@ static void MX_USART3_UART_Init(void);
 static void MX_USB_OTG_FS_PCD_Init(void);
 static void MX_DAC_Init(void);
 static void MX_TIM6_Init(void);
+static void MX_UART4_Init(void);
 /* USER CODE BEGIN PFP */
 static void UpdateActiveSampleCount(void);
 void GenerateSineWave(void);
@@ -295,13 +301,13 @@ void ProcessCommand(char *cmd)
 
       char msg[64];
       sprintf(msg, "OK: Freq=%lu Hz\r\n", current_frequency);
-      HAL_UART_Transmit(&huart3, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
+      HAL_UART_Transmit(&huart4, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
     }
     else
     {
       char msg[64];
       sprintf(msg, "ERR: Freq range %d-%d\r\n", MIN_FREQ, MAX_FREQ);
-      HAL_UART_Transmit(&huart3, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
+      HAL_UART_Transmit(&huart4, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
     }
   }
   else if (cmd[0] == 'A' || cmd[0] == 'a')
@@ -314,13 +320,13 @@ void ProcessCommand(char *cmd)
 
       char msg[64];
       sprintf(msg, "OK: Amplitude=%u (0..4095)\r\n", current_amplitude);
-      HAL_UART_Transmit(&huart3, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
+      HAL_UART_Transmit(&huart4, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
     }
     else
     {
       char msg[64];
       sprintf(msg, "ERR: Amplitude range %d-%d\r\n", MIN_AMP, MAX_AMP);
-      HAL_UART_Transmit(&huart3, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
+      HAL_UART_Transmit(&huart4, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
     }
   }
   else if (cmd[0] == 'W' || cmd[0] == 'w')
@@ -334,12 +340,12 @@ void ProcessCommand(char *cmd)
       const char *names[] = {"SINE","SQUARE","TRIANGLE","SAWTOOTH"};
       char msg[48];
       sprintf(msg, "OK: Wave=%s\r\n", names[current_waveform]);
-      HAL_UART_Transmit(&huart3, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
+      HAL_UART_Transmit(&huart4, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
     }
     else
     {
       char msg[] = "ERR: Waveform must be 0-3\r\n";
-      HAL_UART_Transmit(&huart3, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
+      HAL_UART_Transmit(&huart4, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
     }
   }
   else if (cmd[0] >= '0' && cmd[0] <= '3')
@@ -351,7 +357,7 @@ void ProcessCommand(char *cmd)
     const char *names[] = {"SINE","SQUARE","TRIANGLE","SAWTOOTH"};
     char msg[64];
     sprintf(msg, "Waveform: %s\r\n", names[current_waveform]);
-    HAL_UART_Transmit(&huart3, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
+    HAL_UART_Transmit(&huart4, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
   }
   else if (cmd[0] == 'D' || cmd[0] == 'd')
   {
@@ -360,7 +366,7 @@ void ProcessCommand(char *cmd)
     sprintf(msg,
             "Freq:%lu Hz | Waveform:%s | Amplitude:%u\r\n",
             current_frequency, names[current_waveform], current_amplitude);
-    HAL_UART_Transmit(&huart3, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
+    HAL_UART_Transmit(&huart4, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
   }
   else if (cmd[0] == 'H' || cmd[0] == 'h')
   {
@@ -372,7 +378,7 @@ void ProcessCommand(char *cmd)
       "W<0-3>     - Change waveform\r\n"
       "D          - Display current settings\r\n"
       "H          - Help\r\n";
-    HAL_UART_Transmit(&huart3, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
+    HAL_UART_Transmit(&huart4, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
   }
 }
 
@@ -383,7 +389,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-  if (huart->Instance == USART3)
+  if (huart->Instance == UART4)
   {
     uint8_t c = uart_rx_buffer[0];
     if (c == '\r' || c == '\n')
@@ -400,43 +406,72 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
       uart_cmd_buffer[uart_cmd_index++] = c;
     }
 
-    HAL_UART_Receive_IT(&huart3, uart_rx_buffer, 1);
+    HAL_UART_Receive_IT(&huart4, uart_rx_buffer, 1);
   }
 }
 
 /* USER CODE END 0 */
 
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
 int main(void)
 {
+
+  /* USER CODE BEGIN 1 */
+
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
   SystemClock_Config();
 
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
-  MX_ETH_Init();
-  MX_USART3_UART_Init();
-  MX_USB_OTG_FS_PCD_Init();
+  // MX_ETH_Init();
+  // MX_USART3_UART_Init();
+  // MX_USB_OTG_FS_PCD_Init();
   MX_DAC_Init();
   MX_TIM6_Init();
+  MX_UART4_Init();
+  /* USER CODE BEGIN 2 */
 
   UpdateActiveSampleCount();
   UpdateWaveform();
   if (StartDACOutput() != HAL_OK)
     Error_Handler();
 
-  HAL_UART_Receive_IT(&huart3, uart_rx_buffer, 1);
+  HAL_UART_Receive_IT(&huart4, uart_rx_buffer, 1);
 
   {
     char startup_msg[] =
       "Function Generator Started\r\n"
       "Type 'H' for help\r\n";
-    HAL_UART_Transmit(&huart3, (uint8_t *)startup_msg,
+    HAL_UART_Transmit(&huart4, (uint8_t *)startup_msg,
                       strlen(startup_msg), HAL_MAX_DELAY);
   }
 
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
   while (1)
   {
-    if (need_rebuild)
+        if (need_rebuild)
     {
       need_rebuild = 0;
       RebuildWaveformAndRestart();
@@ -448,13 +483,12 @@ int main(void)
     }
 
     HAL_Delay(1);
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
   }
+  /* USER CODE END 3 */
 }
-
-/* SystemClock_Config, MX_* init, Error_Handler, assert_failed remain unchanged */
-/* ... (keep the rest of CubeMX-generated code as in your file) */
-
-
 
 /**
   * @brief System Clock Configuration
@@ -641,6 +675,41 @@ static void MX_TIM6_Init(void)
   /* USER CODE BEGIN TIM6_Init 2 */
 
   /* USER CODE END TIM6_Init 2 */
+
+}
+
+/**
+  * @brief UART4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_UART4_Init(void)
+{
+
+  /* USER CODE BEGIN UART4_Init 0 */
+
+  /* USER CODE END UART4_Init 0 */
+
+  /* USER CODE BEGIN UART4_Init 1 */
+
+  /* USER CODE END UART4_Init 1 */
+  huart4.Instance = UART4;
+  huart4.Init.BaudRate = 115200;
+  huart4.Init.WordLength = UART_WORDLENGTH_8B;
+  huart4.Init.StopBits = UART_STOPBITS_1;
+  huart4.Init.Parity = UART_PARITY_NONE;
+  huart4.Init.Mode = UART_MODE_TX_RX;
+  huart4.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart4.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart4.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart4.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN UART4_Init 2 */
+
+  /* USER CODE END UART4_Init 2 */
 
 }
 
